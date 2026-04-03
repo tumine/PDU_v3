@@ -14,7 +14,7 @@
 // 例如，使用 LA 指令集的需要注释 `define INSTRUCTION_SET_RISCV
 //      使用 RV 指令集的需要注释 `define INSTRUCTION_SET_LOONGARCH
 
-`define INSTRUCTION_SET_LOONGARCH
+//`define INSTRUCTION_SET_LOONGARCH
 `define INSTRUCTION_SET_RISCV
 
 // ============================== Step 2 ==============================
@@ -25,26 +25,26 @@
 
 `ifdef INSTRUCTION_SET_RISCV
 `ifndef INSTRUCTION_SET_LOONGARCH
-    `define PDU_IMEM_FILE "<your_path_to_workspace>/vsrc/inits/pdu_inits/riscv/pdu_imem.ini"
-    `define PDU_DMEM_FILE "<your_path_to_workspace>/vsrc/inits/pdu_inits/riscv/pdu_dmem.ini"
+    `define PDU_IMEM_FILE "E:/PDU_v3/vsrc/inits/pdu_inits/riscv/pdu_imem.ini"
+    `define PDU_DMEM_FILE "E:/PDU_v3/vsrc/inits/pdu_inits/riscv/pdu_dmem.ini"
 `endif
 `endif
 `ifdef INSTRUCTION_SET_LOONGARCH
 `ifndef INSTRUCTION_SET_RISCV
-    `define PDU_IMEM_FILE "<your_path_to_workspace>/vsrc/inits/pdu_inits/loongarch/pdu_imem.ini"
-    `define PDU_DMEM_FILE "<your_path_to_workspace>/vsrc/inits/pdu_inits/loongarch/pdu_dmem.ini"
+    `define PDU_IMEM_FILE "E:/PDU_v3/vsrc/inits/pdu_inits/loongarch/pdu_imem.ini"
+    `define PDU_DMEM_FILE "E:/PDU_v3/vsrc/inits/pdu_inits/loongarch/pdu_dmem.ini"
 `endif
 `endif
 
-`define CPU_IMEM_FILE "<your_path_to_workspace>/vsrc/inits/cpu_inits/instr.ini"
-`define CPU_DMEM_FILE "<your_path_to_workspace>/vsrc/inits/cpu_inits/data.ini"
+`define CPU_IMEM_FILE "E:/PDU_v3/vsrc/inits/cpu_inits/instr.ini"
+`define CPU_DMEM_FILE "E:/PDU_v3/vsrc/inits/cpu_inits/data.ini"
 
 // ============================== Step 3 ==============================
 // If you choose to use FPGAOL, then COMMENT the line below.
 // 如果你在 FPGAOL 上使用 PDU v3，请将下面这行代码**注释**
 // 如果你在物理开发板上使用 PDU v3，请将下面这行代码**取消注释**
 
-// `define PHYSICAL_BOARD
+ `define PHYSICAL_BOARD
 
 // ============================== Step 4 ==============================
 // 依据自己的实际需要设定下面的参数
