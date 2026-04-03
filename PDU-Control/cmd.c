@@ -510,17 +510,6 @@ static bool step1() {
         while(*CORE_ACK != 0);
         return false;
     }
-    if(*CORE_CURRENT_PC < CORE_IMEM_START || *CORE_CURRENT_PC >= CORE_IMEM_END) {
-        uart_puts("PC out of bounds: ");
-        uart_put_uint32_hex8(*CORE_CURRENT_PC);
-        uart_puts("\n\r");
-        *CORE_COMMAND = COMMAND_NONE;
-        while(*CORE_ACK != 0);
-        return false;
-    }
-    uart_puts("PC: ");
-    uart_put_uint32_hex8(*CORE_CURRENT_PC);
-    uart_puts("\n\r");
     *CORE_COMMAND = COMMAND_NONE;
     while(*CORE_ACK != 0);
     return true;
