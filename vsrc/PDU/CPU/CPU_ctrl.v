@@ -276,7 +276,7 @@ module CPU_ctrl (
             STATE_CORE_STEP:
                 begin
                     cpu_global_en = 1'B1;
-                    if (cpu_commit_en) begin
+                    if (cpu_commit_en_sync2) begin  // Use synchronized signal
                         cpu_global_en = 1'B0;
                         state_next = STATE_WAIT_ACK;
                     end
@@ -284,15 +284,15 @@ module CPU_ctrl (
             STATE_CORE_RUN:
                 begin
                     cpu_global_en = 1'B1;
-                    if (cpu_commit_en) begin
+                    if (cpu_commit_en_sync2) begin  // Use synchronized signal
                         for (i = 0; i < 8; i = i + 1) begin
-                            if (cpu_commit_pc == reg_breakpoint_addr[i] && reg_breakpoint_valid[i]) begin
+                            if (cpu_commit_pc_sync2 == reg_breakpoint_addr[i] && reg_breakpoint_valid[i]) begin  // Use synchronized PC
                                 cpu_global_en = 1'B0;
                                 state_next = STATE_WAIT_ACK;
                             end
                         end
                     end
-                    if (cpu_commit_halt) begin
+                    if (cpu_commit_halt_sync2) begin  // Use synchronized signal
                         cpu_global_en = 1'B0;
                         state_next = STATE_WAIT_ACK;
                     end
@@ -369,21 +369,67 @@ module CPU_ctrl (
     assign cpu_reg_ra = interface_addr[6 : 2];
     assign core_reg_rd = cpu_reg_rd;
 
+/* ------------------------------ CDC synchronizers ----------------------------- */
+
+    // Synchronize CPU commit signals from cpu_clk domain to sys_clk domain
+    reg cpu_commit_en_sync1, cpu_commit_en_sync2;
+    reg cpu_commit_en_prev;
+    reg [31:0] cpu_commit_pc_sync1, cpu_commit_pc_sync2;
+    reg cpu_commit_halt_sync1, cpu_commit_halt_sync2;
+    wire cpu_commit_en_pulse;  // Pulse detector output
+    
+    initial begin
+        cpu_commit_en_sync1 = 0;
+        cpu_commit_en_sync2 = 0;
+        cpu_commit_en_prev = 0;
+        cpu_commit_pc_sync1 = 0;
+        cpu_commit_pc_sync2 = 0;
+        cpu_commit_halt_sync1 = 0;
+        cpu_commit_halt_sync2 = 0;
+    end
+    
+    always @(posedge sys_clk) begin
+        if (sys_rst) begin
+            cpu_commit_en_sync1 <= 0;
+            cpu_commit_en_sync2 <= 0;
+            cpu_commit_en_prev <= 0;
+            cpu_commit_pc_sync1 <= 0;
+            cpu_commit_pc_sync2 <= 0;
+            cpu_commit_halt_sync1 <= 0;
+            cpu_commit_halt_sync2 <= 0;
+        end
+        else begin
+            // 2-stage synchronizers
+            cpu_commit_en_sync1 <= cpu_commit_en;
+            cpu_commit_en_sync2 <= cpu_commit_en_sync1;
+            cpu_commit_en_prev <= cpu_commit_en_sync2;
+            
+            cpu_commit_pc_sync1 <= cpu_commit_pc;
+            cpu_commit_pc_sync2 <= cpu_commit_pc_sync1;
+            
+            cpu_commit_halt_sync1 <= cpu_commit_halt;
+            cpu_commit_halt_sync2 <= cpu_commit_halt_sync1;
+        end
+    end
+    
+    // Pulse detector: detect rising edge of synchronized signal
+    assign cpu_commit_en_pulse = cpu_commit_en_sync2 & ~cpu_commit_en_prev;
+
     reg [ 2 : 0] breakpoint_hit_id;
 
     always @(posedge sys_clk) begin
         if (sys_rst) begin
             core_current_pc <= 0;
         end
-        else if (cpu_commit_en) begin
-            core_current_pc <= cpu_commit_pc;
+        else if (cpu_commit_en_pulse) begin  // Use synchronized pulse
+            core_current_pc <= cpu_commit_pc_sync2;  // Use synchronized PC
         end
     end
 
     always @(*) begin
         breakpoint_hit_id = 0;
         for (i = 0; i < 8; i = i + 1) begin
-            if (cpu_commit_pc == reg_breakpoint_addr[i] && reg_breakpoint_valid[i]) begin
+            if (cpu_commit_pc_sync2 == reg_breakpoint_addr[i] && reg_breakpoint_valid[i]) begin  // Use synchronized PC
                 breakpoint_hit_id = i[2 : 0];
             end
         end
@@ -393,10 +439,10 @@ module CPU_ctrl (
         if (sys_rst) begin
             core_break <= 4'H8;
         end
-        else if (cpu_commit_halt) begin
+        else if (cpu_commit_halt_sync2) begin  // Use synchronized halt
             core_break <= 4'H8;
         end
-        else if (cpu_commit_en) begin
+        else if (cpu_commit_en_pulse) begin  // Use synchronized pulse
             core_break <= {1'B0, breakpoint_hit_id};
         end
     end

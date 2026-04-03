@@ -1,7 +1,16 @@
 
 ## Clock signal
 set_property -dict { PACKAGE_PIN E3    IOSTANDARD LVCMOS33 } [get_ports { sys_clk }]; #IO_L12P_T1_MRCC_35 Sch=clk100mhz
-create_clock -add -name sys_clk_pin -period 130 -waveform {0 65} [get_ports {sys_clk}];
+create_clock -add -name sys_clk_pin -period 10.0 -waveform {0 5} [get_ports {sys_clk}];
+
+# Generated clock constraint for CPU clock divider
+# cpu_clk period: 130ns (~7.69MHz), derived from sys_clk
+create_generated_clock -name cpu_clk -divide_by 13 -source [get_ports sys_clk] [get_pins cpu_clock_divider/cpu_clk_reg/Q]
+
+# Clock domain crossing constraints
+# CDC synchronizers handle these crossings in TOP.v and CPU_ctrl.v
+set_false_path -from [get_clocks cpu_clk] -to [get_clocks sys_clk_pin]
+set_false_path -from [get_clocks sys_clk_pin] -to [get_clocks cpu_clk]
 
 
 ##Switches
