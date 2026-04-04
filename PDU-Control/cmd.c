@@ -370,7 +370,7 @@ void read_data(unsigned int _addr, unsigned int _count) {
         *CORE_DATA_ADDR = _addr + (i << 2);
         *CORE_COMMAND = COMMAND_READ_DATA;
         while(*CORE_ACK == 0);
-        uart_put_uint32_hex8(_addr);
+        uart_put_uint32_hex8(_addr + (i << 2));
         uart_puts(": ");
         uart_put_uint32_hex8(*CORE_DATA_READ);
         uart_puts("\n\r");
