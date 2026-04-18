@@ -68,7 +68,6 @@ module TOP(
     wire [ 0 : 0] dmem_we;
 
     wire [ 0 : 0] sys_rst_in;
-    wire [ 0 : 0] cpu_clk;  // Divided clock for student CPU
 
     `ifdef PHYSICAL_BOARD
         assign  sys_rst_in = ~sys_rst;
@@ -76,87 +75,6 @@ module TOP(
     `ifndef PHYSICAL_BOARD
         assign  sys_rst_in = sys_rst;
     `endif
-
-    // Clock divider: 100MHz -> ~7.69MHz (130ns period) for CPU
-    clock_divider cpu_clock_divider (
-        .sys_clk                        (sys_clk                    ),
-        .sys_rst                        (sys_rst_in                 ),
-        .cpu_clk                        (cpu_clk                    )
-    );
-
-    // CDC: synchronize cpu_rst and cpu_global_en from sys_clk to cpu_clk
-    // 2-stage synchronizer for control signals (reg type for proper FF inference)
-    reg cpu_rst_sync;
-    reg cpu_global_en_sync;
-    reg cpu_rst_sync1, cpu_rst_sync2;
-    reg cpu_global_en_sync1, cpu_global_en_sync2;
-    
-    initial begin
-        cpu_rst_sync1 = 0; cpu_rst_sync2 = 0;
-        cpu_global_en_sync1 = 0; cpu_global_en_sync2 = 0;
-    end
-    
-    always @(posedge cpu_clk) begin
-        cpu_rst_sync1 <= cpu_rst;
-        cpu_rst_sync2 <= cpu_rst_sync1;
-        cpu_rst_sync <= cpu_rst_sync2;
-        
-        cpu_global_en_sync1 <= cpu_global_en;
-        cpu_global_en_sync2 <= cpu_global_en_sync1;
-        cpu_global_en_sync <= cpu_global_en_sync2;
-    end
-
-    // CDC: extend CPU_ctrl write enables into cpu_clk domain
-    // CPU_ctrl writes are one-shot pulses in sys_clk domain (10ns)
-    // Need to stretch to at least one cpu_clk cycle (130ns)
-    wire cpu_ctrl_active = ~cpu_global_en_sync;  // CPU_ctrl active when CPU halted
-    
-    // Stretch CPU_ctrl write enables: sample sys_clk domain pulses in cpu_clk domain
-    reg cpu_ctrl_imem_we_ext, cpu_ctrl_dmem_we_ext;
-    
-    initial begin
-        cpu_ctrl_imem_we_ext = 0;
-        cpu_ctrl_dmem_we_ext = 0;
-    end
-    
-    always @(posedge cpu_clk) begin
-        if (cpu_rst_sync) begin
-            cpu_ctrl_imem_we_ext <= 0;
-            cpu_ctrl_dmem_we_ext <= 0;
-        end
-        else if (cpu_ctrl_active) begin
-            // Capture write pulse and hold for one cpu_clk cycle
-            cpu_ctrl_imem_we_ext <= cpu_ctrl_imem_we;
-            cpu_ctrl_dmem_we_ext <= cpu_ctrl_dmem_we;
-        end
-        else begin
-            cpu_ctrl_imem_we_ext <= 0;
-            cpu_ctrl_dmem_we_ext <= 0;
-        end
-    end
-
-    // CDC: synchronize CPU_ctrl read data from cpu_clk to sys_clk domain
-    // imem_rdata and dmem_rdata come from memories running in cpu_clk domain
-    reg [31:0] cpu_ctrl_imem_rdata_sync1, cpu_ctrl_imem_rdata_sync2;
-    reg [31:0] cpu_ctrl_dmem_rdata_sync1, cpu_ctrl_dmem_rdata_sync2;
-    
-    initial begin
-        cpu_ctrl_imem_rdata_sync1 = 0; cpu_ctrl_imem_rdata_sync2 = 0;
-        cpu_ctrl_dmem_rdata_sync1 = 0; cpu_ctrl_dmem_rdata_sync2 = 0;
-    end
-    
-    always @(posedge sys_clk) begin
-        if (sys_rst_in) begin
-            cpu_ctrl_imem_rdata_sync1 <= 0; cpu_ctrl_imem_rdata_sync2 <= 0;
-            cpu_ctrl_dmem_rdata_sync1 <= 0; cpu_ctrl_dmem_rdata_sync2 <= 0;
-        end
-        else begin
-            cpu_ctrl_imem_rdata_sync1 <= imem_rdata;
-            cpu_ctrl_imem_rdata_sync2 <= cpu_ctrl_imem_rdata_sync1;
-            cpu_ctrl_dmem_rdata_sync1 <= dmem_rdata;
-            cpu_ctrl_dmem_rdata_sync2 <= cpu_ctrl_dmem_rdata_sync1;
-        end
-    end
 
     PDU_kernel pdu_kernel(
         .sys_clk                        (sys_clk                    ),
@@ -247,12 +165,12 @@ module TOP(
         .interface_we                   (cpu_ctrl_interface_we      ),
 
         .imem_addr                      (cpu_ctrl_imem_addr         ),
-        .imem_rdata                     (cpu_ctrl_imem_rdata_sync2  ),  // Use synchronized read data
+        .imem_rdata                     (cpu_ctrl_imem_rdata        ),
         .imem_wdata                     (cpu_ctrl_imem_wdata        ),
         .imem_we                        (cpu_ctrl_imem_we           ),
 
         .dmem_addr                      (cpu_ctrl_dmem_addr         ),
-        .dmem_rdata                     (cpu_ctrl_dmem_rdata_sync2  ),  // Use synchronized read data
+        .dmem_rdata                     (cpu_ctrl_dmem_rdata        ),
         .dmem_wdata                     (cpu_ctrl_dmem_wdata        ),
         .dmem_we                        (cpu_ctrl_dmem_we           ),
 
@@ -267,10 +185,10 @@ module TOP(
     );
 
     CPU cpu(
-        .clk                            (cpu_clk                    ),  // Use divided clock for CPU
-        .rst                            (cpu_rst_sync               ),  // Use synchronized reset
+        .clk                            (sys_clk                    ),
+        .rst                            (cpu_rst                    ),
 
-        .global_en                      (cpu_global_en_sync         ),  // Use synchronized enable
+        .global_en                      (cpu_global_en              ),
         .imem_raddr                     (cpu_imem_addr              ),
         .imem_rdata                     (cpu_imem_rdata             ),
 
@@ -295,8 +213,8 @@ module TOP(
     );
 
     MEM_ARBITER mem_arbiter(
-        .cpu_global_en                  (cpu_global_en_sync        ),  // Use synchronized enable
-        
+        .cpu_global_en                  (cpu_global_en              ),
+
         .cpu_imem_addr                  (cpu_imem_addr              ),
         .cpu_imem_rdata                 (cpu_imem_rdata             ),
         .cpu_dmem_addr                  (cpu_dmem_addr              ),
@@ -307,11 +225,11 @@ module TOP(
         .cpu_ctrl_imem_addr             (cpu_ctrl_imem_addr         ),
         .cpu_ctrl_imem_rdata            (cpu_ctrl_imem_rdata        ),
         .cpu_ctrl_imem_wdata            (cpu_ctrl_imem_wdata        ),
-        .cpu_ctrl_imem_we               (cpu_ctrl_imem_we_ext       ),  // Use stretched write enable
+        .cpu_ctrl_imem_we               (cpu_ctrl_imem_we           ),
         .cpu_ctrl_dmem_addr             (cpu_ctrl_dmem_addr         ),
         .cpu_ctrl_dmem_rdata            (cpu_ctrl_dmem_rdata        ),
         .cpu_ctrl_dmem_wdata            (cpu_ctrl_dmem_wdata        ),
-        .cpu_ctrl_dmem_we               (cpu_ctrl_dmem_we_ext       ),  // Use stretched write enable
+        .cpu_ctrl_dmem_we               (cpu_ctrl_dmem_we           ),
 
         .imem_addr                      (imem_addr                  ),
         .imem_rdata                     (imem_rdata                 ),
@@ -334,7 +252,7 @@ module TOP(
     )
     imem
     (
-        .clk                            (cpu_clk                                ),  // CPU memory runs on cpu_clk
+        .clk                            (sys_clk                                ),
         
         .addr                           (imem_addr_offset[IMEM_DEPTH + 1 : 2]   ),
         .rdata                          (imem_rdata                             ),
@@ -347,7 +265,7 @@ module TOP(
     )
     dmem
     (
-        .clk                            (cpu_clk                                ),  // CPU memory runs on cpu_clk
+        .clk                            (sys_clk                                ),
         
         .addr                           (dmem_addr_offset[DMEM_DEPTH + 1 : 2]   ),
         .rdata                          (dmem_rdata                             ),
