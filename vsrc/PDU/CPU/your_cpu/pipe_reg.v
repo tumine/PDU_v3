@@ -55,7 +55,7 @@ module seg_reg (
     input  wire [ 1:0] wb_sel_in,
     input  wire        alu_src_a_in,
     input  wire        alu_src_b_in,
-    input  wire [ 4:0] alu_op_in,       // ALU 操作控制信号
+    input  wire [ 3:0] alu_op_in,       // ALU 操作控制信号；裁剪 RV32M 后 4 位足够编码基础 ALU
     input  wire [ 2:0] cmp_op_in,       // 比较操作控制信号
     input  wire        mem_write_in,
     input  wire        mem_read_in,
@@ -87,7 +87,7 @@ module seg_reg (
     output wire [ 1:0] wb_sel_out,
     output wire        alu_src_a_out,
     output wire        alu_src_b_out,
-    output wire [ 4:0] alu_op_out,
+    output wire [ 3:0] alu_op_out,
     output wire [ 2:0] cmp_op_out,
     output wire        mem_write_out,
     output wire        mem_read_out,
@@ -119,7 +119,8 @@ module seg_reg (
     pipe_reg #(.WIDTH(2))  reg_wb_sel        (.clk(clk), .rst(rst), .en(en), .stall(stall), .flush(flush), .data_in(wb_sel_in),        .data_out(wb_sel_out));
     pipe_reg #(.WIDTH(1))  reg_alu_src_a     (.clk(clk), .rst(rst), .en(en), .stall(stall), .flush(flush), .data_in(alu_src_a_in),     .data_out(alu_src_a_out));
     pipe_reg #(.WIDTH(1))  reg_alu_src_b     (.clk(clk), .rst(rst), .en(en), .stall(stall), .flush(flush), .data_in(alu_src_b_in),     .data_out(alu_src_b_out));
-    pipe_reg #(.WIDTH(5))  reg_alu_op        (.clk(clk), .rst(rst), .en(en), .stall(stall), .flush(flush), .data_in(alu_op_in),        .data_out(alu_op_out));
+    // ALU 控制位宽由 5 位收窄到 4 位，减少每级流水寄存器和控制选择树的 LUT/FF 压力。
+    pipe_reg #(.WIDTH(4))  reg_alu_op        (.clk(clk), .rst(rst), .en(en), .stall(stall), .flush(flush), .data_in(alu_op_in),        .data_out(alu_op_out));
     pipe_reg #(.WIDTH(3))  reg_cmp_op        (.clk(clk), .rst(rst), .en(en), .stall(stall), .flush(flush), .data_in(cmp_op_in),        .data_out(cmp_op_out));
     pipe_reg #(.WIDTH(1))  reg_mem_write     (.clk(clk), .rst(rst), .en(en), .stall(stall), .flush(flush), .data_in(mem_write_in),     .data_out(mem_write_out));
     pipe_reg #(.WIDTH(1))  reg_mem_read      (.clk(clk), .rst(rst), .en(en), .stall(stall), .flush(flush), .data_in(mem_read_in),      .data_out(mem_read_out));

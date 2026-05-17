@@ -11,7 +11,8 @@ module IMEM#(
     input                   [ 0 : 0]            we
 );
 
-    reg [31 : 0] mem [0 : (1 << DEPTH) - 1];
+    // 指令存储器容量较大，显式提示 Vivado 使用 Block RAM，避免以分布式 RAM/LUT 实现而加重 LUT 压力。
+    (* ram_style = "block" *) reg [31 : 0] mem [0 : (1 << DEPTH) - 1];
 
     initial begin
         $readmemh(`CPU_IMEM_FILE, mem);

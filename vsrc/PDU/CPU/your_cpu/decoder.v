@@ -14,7 +14,7 @@ module decoder (
     output reg  [1:0] wb_sel,       // 写回选择 00:ALU 01:MEM 10:PC+4
     output reg        alu_src_a,    // 0: rs1, 1: PC
     output reg        alu_src_b,    // 0: rs2, 1: imm
-    output reg  [4:0] alu_op,       // ALU 操作码
+    output reg  [3:0] alu_op,       // ALU 操作码
     output reg  [2:0] cmp_op,       // 比较器操作码
     output reg        mem_write,    // 内存写使能
     output reg        mem_read,     // 内存读使能
@@ -34,27 +34,19 @@ module decoder (
     localparam AUIPC    = 7'b0010111;
     localparam SYSTEM   = 7'b1110011;
 
-    // ALU 操作码定义（与 alu.v 保持一致）
-    localparam ADD      = 5'd0;
-    localparam SUB      = 5'd1;
-    localparam SLL      = 5'd2;
-    localparam SRL      = 5'd3;
-    localparam SRA      = 5'd4;
-    localparam AND      = 5'd5;
-    localparam OR       = 5'd6;
-    localparam XOR      = 5'd7;
-    localparam SLT      = 5'd8;
-    localparam SLTU     = 5'd9;
-    localparam B_OUT    = 5'd10;
-    // RV32M 扩展
-    localparam MUL      = 5'd11;
-    localparam MULH     = 5'd12;
-    localparam MULHSU   = 5'd13;
-    localparam MULHU    = 5'd14;
-    localparam DIV      = 5'd15;
-    localparam DIVU     = 5'd16;
-    localparam REM      = 5'd17;
-    localparam REMU     = 5'd18;
+    // ALU 操作码定义（与 alu.v 保持一致）。
+    // RV32M 乘除法已裁剪，因此 4 位编码即可覆盖所有保留的 RV32I 基础 ALU 操作。
+    localparam ADD      = 4'd0;
+    localparam SUB      = 4'd1;
+    localparam SLL      = 4'd2;
+    localparam SRL      = 4'd3;
+    localparam SRA      = 4'd4;
+    localparam AND      = 4'd5;
+    localparam OR       = 4'd6;
+    localparam XOR      = 4'd7;
+    localparam SLT      = 4'd8;
+    localparam SLTU     = 4'd9;
+    localparam B_OUT    = 4'd10;
 
     always @(*) begin
         // 默认值
@@ -79,17 +71,10 @@ module decoder (
                 alu_src_b = 0;          // rs2
 
                 if (funct7 == 7'b0000001) begin
-                    // RV32M 扩展指令
-                    case (funct3)
-                        3'b000: alu_op = MUL;
-                        3'b001: alu_op = MULH;
-                        3'b010: alu_op = MULHSU;
-                        3'b011: alu_op = MULHU;
-                        3'b100: alu_op = DIV;
-                        3'b101: alu_op = DIVU;
-                        3'b110: alu_op = REM;
-                        3'b111: alu_op = REMU;
-                    endcase
+                    // RV32M 扩展指令已被硬件裁剪：不写回寄存器，等价为安全 NOP。
+                    // 这样可以从译码源头阻断 MUL/DIV/REM 等操作码进入 ALU，避免 Vivado 综合乘除法器。
+                    rf_we  = 1'b0;
+                    alu_op = ADD;
                 end
                 else begin
                     // RV32I 基本 R 型

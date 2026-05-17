@@ -56,6 +56,8 @@ module CPU_ctrl (
     output                  [31 : 0]            dmem_wdata          ,
     input                   [31 : 0]            dmem_rdata          ,
     output          reg     [ 0 : 0]            dmem_we             ,
+    output          reg     [ 0 : 0]            dmem_req            ,
+    input                   [ 0 : 0]            dmem_ready          ,
 
     // With students' CPU
     // Control signals
@@ -207,13 +209,14 @@ module CPU_ctrl (
 
     integer i;
 
-    localparam STATE_IDLE               = 2'H0;
-    localparam STATE_CORE_STEP          = 2'H1;
-    localparam STATE_CORE_RUN           = 2'H2;
-    localparam STATE_WAIT_ACK           = 2'H3;
+    localparam STATE_IDLE               = 3'H0;
+    localparam STATE_CORE_STEP          = 3'H1;
+    localparam STATE_CORE_RUN           = 3'H2;
+    localparam STATE_WAIT_ACK           = 3'H3;
+    localparam STATE_MEM_WAIT           = 3'H4;
 
-    reg [1 : 0] state_current;
-    reg [1 : 0] state_next;
+    reg [2 : 0] state_current;
+    reg [2 : 0] state_next;
 
     always @(posedge sys_clk) begin
         if (sys_rst) begin
@@ -228,6 +231,7 @@ module CPU_ctrl (
         state_next = state_current;
         imem_we = 1'B0;
         dmem_we = 1'B0;
+        dmem_req = 1'B0;
         core_ack = 1'B0;
         cpu_rst = 1'B0;
         cpu_global_en = 1'B0;
@@ -242,11 +246,13 @@ module CPU_ctrl (
                         state_next = STATE_WAIT_ACK;
                     end
                     if (core_command[8]) begin                  // READ_DATA
-                        state_next = STATE_WAIT_ACK;
+                        dmem_req = 1'B1;                         // 数据存储器现在带延迟，读命令需要先发起事务
+                        state_next = STATE_MEM_WAIT;
                     end
                     if (core_command[7]) begin                  // WRITE_DATA
                         dmem_we = 1'B1;
-                        state_next = STATE_WAIT_ACK;
+                        dmem_req = 1'B1;                         // 写请求保持到 dmem_ready，避免 sys_clk 单拍写脉冲丢失
+                        state_next = STATE_MEM_WAIT;
                     end
                     if (core_command[6]) begin                  // READ_REGISTER
                         state_next = STATE_WAIT_ACK;
@@ -276,7 +282,7 @@ module CPU_ctrl (
             STATE_CORE_STEP:
                 begin
                     cpu_global_en = 1'B1;
-                    if (cpu_commit_en_sync2) begin  // Use synchronized signal
+                    if (cpu_commit_en_pulse) begin  // 等待 CPU 真实提交一条指令；Cache stall 期间不会产生该脉冲
                         cpu_global_en = 1'B0;
                         state_next = STATE_WAIT_ACK;
                     end
@@ -284,7 +290,7 @@ module CPU_ctrl (
             STATE_CORE_RUN:
                 begin
                     cpu_global_en = 1'B1;
-                    if (cpu_commit_en_sync2) begin  // Use synchronized signal
+                    if (cpu_commit_en_pulse) begin  // 使用同步后的上升沿，避免同一个 commit 电平被重复识别
                         for (i = 0; i < 8; i = i + 1) begin
                             if (cpu_commit_pc_sync2 == reg_breakpoint_addr[i] && reg_breakpoint_valid[i]) begin  // Use synchronized PC
                                 cpu_global_en = 1'B0;
@@ -294,6 +300,14 @@ module CPU_ctrl (
                     end
                     if (cpu_commit_halt_sync2) begin  // Use synchronized signal
                         cpu_global_en = 1'B0;
+                        state_next = STATE_WAIT_ACK;
+                    end
+                end
+            STATE_MEM_WAIT:
+                begin
+                    dmem_req = 1'B1;                 // 在等待 ready 的所有 sys_clk 周期内持续声明调试访存请求
+                    dmem_we = core_command[7];       // WRITE_DATA 等待期间保持写属性；READ_DATA 时为 0
+                    if (dmem_ready) begin            // 只有后端延迟 DMEM 真正完成后才允许 PDU 看到 ACK
                         state_next = STATE_WAIT_ACK;
                     end
                 end
