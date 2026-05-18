@@ -57,6 +57,19 @@ module CPU (
     wire ex_mem_stall;
     wire mem_wb_stall;
     wire commit_advance;
+    wire bp_redirect_valid;
+    wire [31:0] bp_redirect_pc;
+    wire [31:0] bp_meta_IF;
+    wire [31:0] bp_meta_ID;
+    wire [31:0] bp_meta_EX;
+    wire [31:0] pc_EX;
+    wire [31:0] pc_plus_4_EX;
+    wire        commit_EX;
+    wire        is_branch_EX;
+    wire        is_jal_EX;
+    wire        is_jalr_EX;
+    wire        actual_taken_EX;
+    wire [31:0] actual_target_EX;
 
     // ========================= IF Stage =========================
     wire [31:0] next_pc;
@@ -81,10 +94,43 @@ module CPU (
     wire [31:0] inst_IF = imem_out_bounds ? 32'h00000013 : imem_rdata; // 越界取指时执行 NOP(addi x0,x0,0)
     wire [31:0] pc_plus_4_IF = pc_IF + 32'd4;
     wire        commit_IF = 1'b1;
+    wire        bp_pred_valid_IF;
+    wire        bp_pred_taken_IF;
+    wire [31:0] bp_pred_target_IF;
+    wire [31:0] bp_next_pc_IF = (bp_pred_valid_IF && bp_pred_taken_IF) ? bp_pred_target_IF : pc_plus_4_IF;
+
+    branch_predictor u_branch_predictor (
+        .clk              (clk),
+        .rst              (rst),
+        .en               (global_en),
+        .stall            (dcache_wait),
+        .if_pc            (pc_IF),
+        .if_inst          (inst_IF),
+        .if_pred_valid    (bp_pred_valid_IF),
+        .if_pred_taken    (bp_pred_taken_IF),
+        .if_pred_target   (bp_pred_target_IF),
+        .if_pred_meta     (bp_meta_IF),
+        .ex_valid         (commit_EX),
+        .ex_pc            (pc_EX),
+        .ex_pc_plus4      (pc_plus_4_EX),
+        .ex_target_actual (actual_target_EX),
+        .ex_taken_actual  (actual_taken_EX),
+        .ex_is_branch     (is_branch_EX),
+        .ex_is_jal        (is_jal_EX),
+        .ex_is_jalr       (is_jalr_EX),
+        .ex_meta          (bp_meta_EX),
+        .redirect_valid   (bp_redirect_valid),
+        .redirect_pc      (bp_redirect_pc)
+    );
 
     // ========================= IF/ID Pipeline Register =========================
     wire [31:0] pc_ID, inst_ID, pc_plus_4_ID;
     wire        commit_ID;
+
+    pipe_reg #(.WIDTH(32)) if_id_bp_meta_reg (
+        .clk(clk), .rst(rst), .en(global_en), .stall(if_id_stall), .flush(if_id_flush),
+        .data_in(bp_meta_IF), .data_out(bp_meta_ID)
+    );
 
     seg_reg if_id_reg (
         .clk(clk), .rst(rst), .en(global_en), .stall(if_id_stall), .flush(if_id_flush),
@@ -167,17 +213,21 @@ module CPU (
     );
 
     // ========================= ID/EX Pipeline Register =========================
-    wire [31:0] pc_EX, inst_EX, pc_plus_4_EX;
-    wire        commit_EX;
+    wire [31:0] inst_EX;
     wire [4:0]  rs1_EX, rs2_EX, rd_EX;
     wire [31:0] imm_EX, rf_rdata1_EX, rf_rdata2_EX;
-    wire        rf_we_EX, alu_src_a_EX, alu_src_b_EX, mem_write_EX, mem_read_EX, is_jalr_EX, halt_EX;
+    wire        rf_we_EX, alu_src_a_EX, alu_src_b_EX, mem_write_EX, mem_read_EX, halt_EX;
     wire [1:0]  wb_sel_EX;
     wire [3:0]  alu_op_EX;
     wire [2:0]  cmp_op_EX;
     wire [6:0]  opcode_EX;
     wire [2:0]  funct3_EX;
     wire [6:0]  funct7_EX;
+
+    pipe_reg #(.WIDTH(32)) id_ex_bp_meta_reg (
+        .clk(clk), .rst(rst), .en(global_en), .stall(id_ex_stall), .flush(id_ex_flush),
+        .data_in(bp_meta_ID), .data_out(bp_meta_EX)
+    );
 
     seg_reg id_ex_reg (
         .clk(clk), .rst(rst), .en(global_en), .stall(id_ex_stall), .flush(id_ex_flush),
@@ -219,12 +269,17 @@ module CPU (
         .res        (cmp_res_EX)
     );
 
-    wire is_branch_EX = (opcode_EX == 7'b1100011);
-    wire is_jal_EX    = (opcode_EX == 7'b1101111);
-    wire pc_sel_EX    = is_branch_EX ? cmp_res_EX : (is_jal_EX | is_jalr_EX);
+    assign is_branch_EX = (opcode_EX == 7'b1100011);
+    assign is_jal_EX    = (opcode_EX == 7'b1101111);
+    assign actual_taken_EX = is_branch_EX ? cmp_res_EX : (is_jal_EX | is_jalr_EX);
+    assign actual_target_EX = is_jalr_EX ? {alu_out_EX[31:1], 1'b0} : alu_out_EX;
+    wire pc_sel_EX    = actual_taken_EX;
 
-    assign next_pc = pc_sel_EX ? (is_jalr_EX ? {alu_out_EX[31:1], 1'b0} : alu_out_EX)
-                               : pc_plus_4_IF;
+    // EX 阶段给出最终裁决；若预测路径与真实结果不一致，则优先用 redirect_pc 覆盖 IF 的预测值。
+    // 这样可以保证错误路径在下一个周期被冲刷，且不会让 IF 继续沿着旧方向推进。
+    assign next_pc = bp_redirect_valid ? bp_redirect_pc
+                                       : (bp_pred_valid_IF && bp_pred_taken_IF) ? bp_pred_target_IF
+                                       : pc_plus_4_IF;
 
     // ========================= EX/MEM Pipeline Register =========================
     wire [31:0] pc_MEM, inst_MEM, pc_plus_4_MEM, alu_out_MEM, rf_rdata2_MEM;
@@ -462,7 +517,7 @@ module CPU (
                        && ((rd_EX == rs1_ID && (!alu_src_a_ID || is_branch_ID))
                        ||  (rd_EX == rs2_ID && (!alu_src_b_ID || is_branch_ID || is_store_ID)));
 
-    wire control_hazard = pc_sel_EX;
+    wire control_hazard = bp_redirect_valid;
 
     // Cache 等待优先级最高：等待期间所有段寄存器保持原值，不能执行 flush。
     assign pc_stall    = load_use_hazard || dcache_wait;
