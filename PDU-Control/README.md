@@ -9,6 +9,9 @@
 - `bl`: breakpoint list
 - `step`: step (inst.'s)
 - `run`: run
+- `brun`: benchmark run, execute hardware RUN until halt and print CPU cycles
+- `cycles`: print last benchmark CPU cycle count
+- `bpd [0|1]`: read or set branch predictor disable bit (`1` disables predictor, `0` enables predictor)
 - `reset`: reset
 
 # Instruction Set

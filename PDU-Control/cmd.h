@@ -14,6 +14,9 @@ typedef enum {
     BREAKPOINT_LIST,
     STEP,
     RUN,
+    BENCHMARK_RUN,
+    BENCHMARK_CYCLES,
+    BRANCH_PREDICTOR_DISABLE,
     RESET,
     NONE
 } CommandName;
@@ -36,6 +39,9 @@ void breakpoint_delete(unsigned int _id);
 void breakpoint_list();
 void step(unsigned int _count);
 void run();
+void benchmark_run();
+void benchmark_cycles();
+void branch_predictor_disable(unsigned int _has_arg, unsigned int _disable);
 void reset();
 
 #endif // __CMD_H__

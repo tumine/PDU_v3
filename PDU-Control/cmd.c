@@ -133,6 +133,15 @@ static bool get_uint32_or_none(unsigned int * _hex, const char * _line, unsigned
     return false;
 }
 
+static bool has_more_token(const char * _line, unsigned long _lineSize, unsigned long _offset) {
+    int c;
+    while(_offset < _lineSize && is_ws(c = load_byte(_line + _offset))) {
+        _offset++;
+    }
+    c = load_byte(_line + _offset);
+    return !(c == '\0' || c == '\n' || c == '\r');
+}
+
 static int strcmp(const char * _s1, const char * _s2) {
     while(load_byte(_s1) && load_byte(_s1) == load_byte(_s2)) {
         _s1++;
@@ -255,6 +264,33 @@ bool read_command(Command * _cmd) {
         _cmd->__cmdName = RUN;
         return true;
     }
+    else if(strcmp(cmdName, "brun") == 0) {
+        // brun 直接触发硬件 RUN，由 CPU 内部计时器统计整段执行周期，避免 step 模式引入串口开销。
+        _cmd->__cmdName = BENCHMARK_RUN;
+        return true;
+    }
+    else if(strcmp(cmdName, "cycles") == 0) {
+        // cycles 读取最近一次 benchmark 的 CPU 周期结果，不会重新启动程序。
+        _cmd->__cmdName = BENCHMARK_CYCLES;
+        return true;
+    }
+    else if(strcmp(cmdName, "bpd") == 0) {
+        // bpd 只负责动态开关分支预测器：无参数时查询，有参数时只更新 bit0，不影响 benchmark arm/clear。
+        _cmd->__cmdName = BRANCH_PREDICTOR_DISABLE;
+        if(!has_more_token(cmdLine, 80, offset)) {
+            _cmd->__args[0] = 0;
+            _cmd->__args[1] = 0;
+            return true;
+        }
+        unsigned int disable;
+        if(!get_uint32(&disable, cmdLine, 80, &offset)) {
+            _cmd->__cmdName = NONE;
+            return false;
+        }
+        _cmd->__args[0] = 1;
+        _cmd->__args[1] = disable ? 1 : 0;
+        return true;
+    }
     else if(strcmp(cmdName, "reset") == 0) {
         _cmd->__cmdName = RESET;
         return true;
@@ -290,6 +326,12 @@ void execute_command(Command * _cmd) {
         return step(_cmd->__args[0]);
     case RUN:
         return run();
+    case BENCHMARK_RUN:
+        return benchmark_run();
+    case BENCHMARK_CYCLES:
+        return benchmark_cycles();
+    case BRANCH_PREDICTOR_DISABLE:
+        return branch_predictor_disable(_cmd->__args[0], _cmd->__args[1]);
     case RESET:
         return reset();
     case NONE:
@@ -524,6 +566,74 @@ void step(unsigned int _count) {
 
 void run() {
     while(step1());
+}
+
+void benchmark_run() {
+    unsigned int predictor_disable = *CORE_BENCH_CTRL & 0x1;
+
+    // 基准测试必须走硬件 RUN，而不是循环 step1()；
+    // 否则每条指令之间都会夹入 PDU 串口和 ACK 开销，周期数无法反映 CPU 本身性能。
+    *CORE_BENCH_CTRL = predictor_disable | (1 << 2);
+    while(*CORE_BENCH_CTRL & (1 << 2));
+
+    *CORE_BENCH_CTRL = predictor_disable | (1 << 1);
+    *CORE_COMMAND = COMMAND_RUN;
+    while(*CORE_ACK == 0);
+
+    if(*CORE_BREAK == 8) {
+        uart_puts("Halted at ");
+        uart_put_uint32_hex8(*CORE_CURRENT_PC);
+        uart_puts("\n\r");
+    }
+    else {
+        uart_puts("Breakpoint ");
+        uart_put_uint32_hex(*CORE_BREAK);
+        uart_puts(" hit at ");
+        uart_put_uint32_hex8(*CORE_CURRENT_PC);
+        uart_puts("\n\r");
+    }
+
+    if(*CORE_BENCH_CTRL & (1 << 8)) {
+        uart_puts("Benchmark cycles: ");
+        uart_put_uint32_hex8(*CORE_BENCH_CYCLES);
+        uart_puts("\n\r");
+    }
+    else {
+        uart_puts("Benchmark did not finish at EBREAK; cycle result is not valid\n\r");
+    }
+
+    *CORE_COMMAND = COMMAND_NONE;
+    while(*CORE_ACK != 0);
+    *CORE_BENCH_CTRL = predictor_disable;
+}
+
+void benchmark_cycles() {
+    uart_puts("Benchmark cycles: ");
+    uart_put_uint32_hex8(*CORE_BENCH_CYCLES);
+    uart_puts("\n\r");
+}
+
+void branch_predictor_disable(unsigned int _has_arg, unsigned int _disable) {
+    unsigned int ctrl = *CORE_BENCH_CTRL;
+
+    if(_has_arg) {
+        // 只修改 bit0，保留 benchmark 状态位的硬件只读语义，不主动触发 arm/clear。
+        if(_disable) {
+            ctrl |= 1;
+        }
+        else {
+            ctrl &= ~1;
+        }
+        *CORE_BENCH_CTRL = ctrl;
+    }
+
+    uart_puts("Branch predictor: ");
+    if(*CORE_BENCH_CTRL & 1) {
+        uart_puts("disabled\n\r");
+    }
+    else {
+        uart_puts("enabled\n\r");
+    }
 }
 
 void reset() {

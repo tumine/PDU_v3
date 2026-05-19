@@ -71,6 +71,12 @@
 #define CORE_BREAK ((volatile unsigned int *)(CORE_BASE + 0x50))
 // CURRENT_PC: Read-only, current program counter
 #define CORE_CURRENT_PC ((volatile unsigned int *)(CORE_BASE + 0x54))
+// BENCH_CTRL: Read-write, benchmark control/status
+// [0]: branch predictor disable, [1]: benchmark arm, [2]: benchmark clear request
+// [8]: benchmark done, [9]: benchmark running
+#define CORE_BENCH_CTRL ((volatile unsigned int *)(CORE_BASE + 0x58))
+// BENCH_CYCLES: Read-only, last benchmark CPU cycle count
+#define CORE_BENCH_CYCLES ((volatile unsigned int *)(CORE_BASE + 0x5C))
 // BREAKPOINT_ADDRESS0: Read-only, list of active breakpoints
 #define CORE_BREAKPOINT_ADDR0 ((volatile unsigned int *)(CORE_BASE + 0x60))
 // BREAKPOINT_ADDRESS1: Read-only, list of active breakpoints
