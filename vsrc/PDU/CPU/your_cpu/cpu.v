@@ -16,6 +16,9 @@ module CPU (
     input                   [ 0 : 0]            rst,
     input                   [ 0 : 0]            global_en,
     input                   [ 0 : 0]            cache_flush,
+    input                   [ 0 : 0]            branch_predictor_disable,
+    input                   [ 0 : 0]            benchmark_arm,
+    input                   [ 0 : 0]            benchmark_clear,
 
 /* ------------------------------ Memory (inst) ----------------------------- */
     output                  [31 : 0]            imem_raddr,
@@ -41,6 +44,11 @@ module CPU (
     output                  [31 : 0]            commit_dmem_wa,
     output                  [31 : 0]            commit_dmem_wd,
 
+    output                  [ 0 : 0]            benchmark_clear_ack,
+    output                  [ 0 : 0]            benchmark_done,
+    output                  [ 0 : 0]            benchmark_running,
+    output                  [31 : 0]            benchmark_cycles,
+
     input                   [ 4 : 0]            debug_reg_ra,
     output                  [31 : 0]            debug_reg_rd
 );
@@ -62,6 +70,11 @@ module CPU (
     wire [31:0] bp_meta_IF;
     wire [31:0] bp_meta_ID;
     wire [31:0] bp_meta_EX;
+    wire        bp_used_IF;
+    wire        bp_used_ID;
+    wire        bp_used_EX;
+    wire        control_redirect_valid;
+    wire [31:0] control_redirect_pc;
     wire [31:0] pc_EX;
     wire [31:0] pc_plus_4_EX;
     wire        commit_EX;
@@ -98,11 +111,12 @@ module CPU (
     wire        bp_pred_taken_IF;
     wire [31:0] bp_pred_target_IF;
     wire [31:0] bp_next_pc_IF = (bp_pred_valid_IF && bp_pred_taken_IF) ? bp_pred_target_IF : pc_plus_4_IF;
+    assign bp_used_IF = (!branch_predictor_disable) && bp_pred_valid_IF;
 
     branch_predictor u_branch_predictor (
         .clk              (clk),
         .rst              (rst),
-        .en               (global_en),
+        .en               (global_en && !branch_predictor_disable),
         .stall            (dcache_wait),
         .if_pc            (pc_IF),
         .if_inst          (inst_IF),
@@ -119,6 +133,7 @@ module CPU (
         .ex_is_jal        (is_jal_EX),
         .ex_is_jalr       (is_jalr_EX),
         .ex_meta          (bp_meta_EX),
+        .ex_bp_used       (bp_used_EX),
         .redirect_valid   (bp_redirect_valid),
         .redirect_pc      (bp_redirect_pc)
     );
@@ -130,6 +145,11 @@ module CPU (
     pipe_reg #(.WIDTH(32)) if_id_bp_meta_reg (
         .clk(clk), .rst(rst), .en(global_en), .stall(if_id_stall), .flush(if_id_flush),
         .data_in(bp_meta_IF), .data_out(bp_meta_ID)
+    );
+
+    pipe_reg #(.WIDTH(1)) if_id_bp_used_reg (
+        .clk(clk), .rst(rst), .en(global_en), .stall(if_id_stall), .flush(if_id_flush),
+        .data_in(bp_used_IF), .data_out(bp_used_ID)
     );
 
     seg_reg if_id_reg (
@@ -229,6 +249,11 @@ module CPU (
         .data_in(bp_meta_ID), .data_out(bp_meta_EX)
     );
 
+    pipe_reg #(.WIDTH(1)) id_ex_bp_used_reg (
+        .clk(clk), .rst(rst), .en(global_en), .stall(id_ex_stall), .flush(id_ex_flush),
+        .data_in(bp_used_ID), .data_out(bp_used_EX)
+    );
+
     seg_reg id_ex_reg (
         .clk(clk), .rst(rst), .en(global_en), .stall(id_ex_stall), .flush(id_ex_flush),
         .pc_in(pc_ID), .inst_in(inst_ID), .pc_plus_4_in(pc_plus_4_ID), .commit_in(commit_ID),
@@ -275,11 +300,16 @@ module CPU (
     assign actual_target_EX = is_jalr_EX ? {alu_out_EX[31:1], 1'b0} : alu_out_EX;
     wire pc_sel_EX    = actual_taken_EX;
 
-    // EX 阶段给出最终裁决；若预测路径与真实结果不一致，则优先用 redirect_pc 覆盖 IF 的预测值。
-    // 这样可以保证错误路径在下一个周期被冲刷，且不会让 IF 继续沿着旧方向推进。
-    assign next_pc = bp_redirect_valid ? bp_redirect_pc
-                                       : (bp_pred_valid_IF && bp_pred_taken_IF) ? bp_pred_target_IF
-                                       : pc_plus_4_IF;
+    // EX 阶段给出最终控制流裁决。bp_used_EX 记录“这条指令在 IF 阶段是否真的使用过预测器”：
+    // - 使用过预测器时，只在预测方向错误或 JALR 需要 EX 解析目标时 redirect；
+    // - 没使用预测器时，完全回退到无预测基线，真实 taken/JAL/JALR 在 EX 统一跳转并冲刷流水线。
+    // 这样可以在运行中切换 branch_predictor_disable 时仍按每条指令自己的取指模式收尾，避免半预测状态污染控制流。
+    assign control_redirect_valid = bp_used_EX ? bp_redirect_valid : (commit_EX && actual_taken_EX);
+    assign control_redirect_pc = actual_taken_EX ? actual_target_EX : pc_plus_4_EX;
+
+    assign next_pc = control_redirect_valid ? control_redirect_pc
+                                            : (bp_used_IF && bp_pred_taken_IF) ? bp_pred_target_IF
+                                            : pc_plus_4_IF;
 
     // ========================= EX/MEM Pipeline Register =========================
     wire [31:0] pc_MEM, inst_MEM, pc_plus_4_MEM, alu_out_MEM, rf_rdata2_MEM;
@@ -484,6 +514,61 @@ module CPU (
     assign commit_dmem_wa   = commit_dmem_wa_reg;
     assign commit_dmem_wd   = commit_dmem_wd_reg;
 
+    // ========================= Benchmark Timer =========================
+    // 基准测试计时器工作在 CPU 时钟域，计数单位是 cpu_clk 周期。
+    // Start：PDU arm 后，CPU 第一次在 global_en 且 PC 未停驻的周期真正接收第一条取指。
+    // Stop ：最后一条 EBREAK 在 WB 阶段退休的同一拍，直接使用 commit_WB/halt_WB，避免 TOP 外部 commit_halt 晚一拍。
+    reg benchmark_running_reg;
+    reg benchmark_done_reg;
+    reg [31:0] benchmark_cycles_reg;
+    reg benchmark_clear_ack_reg;
+
+    wire benchmark_start = benchmark_arm && !benchmark_running_reg && !benchmark_done_reg && global_en && !pc_stall;
+    wire benchmark_stop  = benchmark_running_reg && commit_advance && commit_WB && halt_WB;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            benchmark_running_reg <= 1'b0;
+            benchmark_done_reg <= 1'b0;
+            benchmark_cycles_reg <= 32'b0;
+            benchmark_clear_ack_reg <= 1'b0;
+        end
+        else if (benchmark_clear) begin
+            // PDU 在发起 brun 前先清空旧结果；ack 是 CPU 域保持型应答，供 TOP/CPU_ctrl 跨域回收 clear 请求。
+            benchmark_running_reg <= 1'b0;
+            benchmark_done_reg <= 1'b0;
+            benchmark_cycles_reg <= 32'b0;
+            benchmark_clear_ack_reg <= 1'b1;
+        end
+        else begin
+            benchmark_clear_ack_reg <= 1'b0;
+
+            if (benchmark_start) begin
+                // 第一条指令被 IF 接收的周期计为第 1 个周期，保证 Start 边界包含程序开始执行的那一拍。
+                benchmark_running_reg <= 1'b1;
+                benchmark_done_reg <= 1'b0;
+                benchmark_cycles_reg <= 32'd1;
+            end
+            else if (benchmark_running_reg && global_en) begin
+                if (benchmark_stop) begin
+                    // EBREAK 完全退休的周期也必须计入总周期数，因此在停止时锁存 cycles + 1。
+                    benchmark_running_reg <= 1'b0;
+                    benchmark_done_reg <= 1'b1;
+                    benchmark_cycles_reg <= benchmark_cycles_reg + 32'd1;
+                end
+                else begin
+                    // global_en 期间每个 CPU 周期都计入，包括 Cache miss、load-use stall 和分支 flush 惩罚。
+                    benchmark_cycles_reg <= benchmark_cycles_reg + 32'd1;
+                end
+            end
+        end
+    end
+
+    assign benchmark_clear_ack = benchmark_clear_ack_reg;
+    assign benchmark_done      = benchmark_done_reg;
+    assign benchmark_running   = benchmark_running_reg;
+    assign benchmark_cycles    = benchmark_cycles_reg;
+
     // ========================= Forwarding Unit =========================
     wire [1:0] forward_a;
     wire [1:0] forward_b;
@@ -517,7 +602,7 @@ module CPU (
                        && ((rd_EX == rs1_ID && (!alu_src_a_ID || is_branch_ID))
                        ||  (rd_EX == rs2_ID && (!alu_src_b_ID || is_branch_ID || is_store_ID)));
 
-    wire control_hazard = bp_redirect_valid;
+    wire control_hazard = control_redirect_valid;
 
     // Cache 等待优先级最高：等待期间所有段寄存器保持原值，不能执行 flush。
     assign pc_stall    = load_use_hazard || dcache_wait;

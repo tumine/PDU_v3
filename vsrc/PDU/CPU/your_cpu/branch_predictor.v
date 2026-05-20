@@ -221,6 +221,7 @@ module branch_predictor #(
     input  wire                    ex_is_jal,
     input  wire                    ex_is_jalr,
     input  wire [META_W-1:0]       ex_meta,
+    input  wire                    ex_bp_used,
 
     output wire                    redirect_valid,
     output wire [31:0]             redirect_pc
@@ -265,7 +266,9 @@ module branch_predictor #(
     wire                    ex_choice_use_global = ex_meta[META_CHOICE_GLOBAL];
     wire                    ex_pred_taken = ex_meta[META_PRED_TAKEN];
 
-    wire                    train_fire = en && !stall && ex_valid && ex_is_branch;
+    // 只有 IF 阶段真正启用预测器的条件分支，才允许回写历史表。
+    // branch_predictor_disable 拉高期间取入的分支会按无预测路径在 EX 解析，不能用空 meta 污染 BHT/PHT/GHR/Choice。
+    wire                    train_fire = en && !stall && ex_valid && ex_is_branch && ex_bp_used;
     wire                    train_choice_fire = train_fire && (ex_local_pred != ex_global_pred);
 
     local_predictor #(

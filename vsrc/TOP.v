@@ -54,6 +54,17 @@ module TOP(
     wire [ 0 : 0] cpu_cache_flush;
     wire [ 4 : 0] cpu_reg_ra;
     wire [31 : 0] cpu_reg_rd;
+    wire [ 0 : 0] branch_predictor_disable;
+    wire [ 0 : 0] benchmark_arm;
+    wire [ 0 : 0] benchmark_clear;
+    wire [ 0 : 0] benchmark_clear_ack_cpu;
+    wire [ 0 : 0] benchmark_done_cpu;
+    wire [ 0 : 0] benchmark_running_cpu;
+    wire [31 : 0] benchmark_cycles_cpu;
+    wire [ 0 : 0] benchmark_clear_ack_sys;
+    wire [ 0 : 0] benchmark_done_sys;
+    wire [ 0 : 0] benchmark_running_sys;
+    wire [31 : 0] benchmark_cycles_sys;
 
     wire [31 : 0] cpu_imem_addr;
     wire [31 : 0] cpu_imem_rdata;
@@ -103,6 +114,9 @@ module TOP(
     reg cpu_global_en_sync;
     reg cpu_rst_sync1, cpu_rst_sync2;
     reg cpu_global_en_sync1, cpu_global_en_sync2;
+    reg branch_predictor_disable_sync1, branch_predictor_disable_sync2, branch_predictor_disable_sync;
+    reg benchmark_arm_sync1, benchmark_arm_sync2, benchmark_arm_sync;
+    reg benchmark_clear_sync1, benchmark_clear_sync2, benchmark_clear_sync;
 
     initial begin
         cpu_rst_sync = 1'b0;
@@ -111,6 +125,15 @@ module TOP(
         cpu_rst_sync2 = 1'b0;
         cpu_global_en_sync1 = 1'b0;
         cpu_global_en_sync2 = 1'b0;
+        branch_predictor_disable_sync1 = 1'b0;
+        branch_predictor_disable_sync2 = 1'b0;
+        branch_predictor_disable_sync = 1'b0;
+        benchmark_arm_sync1 = 1'b0;
+        benchmark_arm_sync2 = 1'b0;
+        benchmark_arm_sync = 1'b0;
+        benchmark_clear_sync1 = 1'b0;
+        benchmark_clear_sync2 = 1'b0;
+        benchmark_clear_sync = 1'b0;
     end
 
     always @(posedge cpu_clk) begin
@@ -121,6 +144,20 @@ module TOP(
         cpu_global_en_sync1 <= cpu_global_en;
         cpu_global_en_sync2 <= cpu_global_en_sync1;
         cpu_global_en_sync  <= cpu_global_en_sync2;
+
+        // PDU 配置寄存器来自 sys_clk 域，进入 CPU 前先做两级同步；
+        // 这些信号只控制预测器旁路和 benchmark 计时器，不插入 CPU 数据通路关键路径。
+        branch_predictor_disable_sync1 <= branch_predictor_disable;
+        branch_predictor_disable_sync2 <= branch_predictor_disable_sync1;
+        branch_predictor_disable_sync  <= branch_predictor_disable_sync2;
+
+        benchmark_arm_sync1 <= benchmark_arm;
+        benchmark_arm_sync2 <= benchmark_arm_sync1;
+        benchmark_arm_sync  <= benchmark_arm_sync2;
+
+        benchmark_clear_sync1 <= benchmark_clear;
+        benchmark_clear_sync2 <= benchmark_clear_sync1;
+        benchmark_clear_sync  <= benchmark_clear_sync2;
     end
 
     wire cpu_ctrl_active = ~cpu_global_en_sync;
@@ -212,6 +249,10 @@ module TOP(
     reg [31:0] cpu_ctrl_imem_rdata_sync1, cpu_ctrl_imem_rdata_sync2;
     reg [31:0] cpu_ctrl_dmem_rdata_sync1, cpu_ctrl_dmem_rdata_sync2;
     reg cpu_ctrl_dmem_ready_sync1, cpu_ctrl_dmem_ready_sync2;
+    reg benchmark_clear_ack_sync1, benchmark_clear_ack_sync2;
+    reg benchmark_done_sync1, benchmark_done_sync2;
+    reg benchmark_running_sync1, benchmark_running_sync2;
+    reg [31:0] benchmark_cycles_sync1, benchmark_cycles_sync2;
 
     initial begin
         cpu_ctrl_imem_rdata_sync1 = 32'b0;
@@ -220,6 +261,14 @@ module TOP(
         cpu_ctrl_dmem_rdata_sync2 = 32'b0;
         cpu_ctrl_dmem_ready_sync1 = 1'b0;
         cpu_ctrl_dmem_ready_sync2 = 1'b0;
+        benchmark_clear_ack_sync1 = 1'b0;
+        benchmark_clear_ack_sync2 = 1'b0;
+        benchmark_done_sync1 = 1'b0;
+        benchmark_done_sync2 = 1'b0;
+        benchmark_running_sync1 = 1'b0;
+        benchmark_running_sync2 = 1'b0;
+        benchmark_cycles_sync1 = 32'b0;
+        benchmark_cycles_sync2 = 32'b0;
     end
 
     always @(posedge sys_clk) begin
@@ -230,6 +279,14 @@ module TOP(
             cpu_ctrl_dmem_rdata_sync2 <= 32'b0;
             cpu_ctrl_dmem_ready_sync1 <= 1'b0;
             cpu_ctrl_dmem_ready_sync2 <= 1'b0;
+            benchmark_clear_ack_sync1 <= 1'b0;
+            benchmark_clear_ack_sync2 <= 1'b0;
+            benchmark_done_sync1 <= 1'b0;
+            benchmark_done_sync2 <= 1'b0;
+            benchmark_running_sync1 <= 1'b0;
+            benchmark_running_sync2 <= 1'b0;
+            benchmark_cycles_sync1 <= 32'b0;
+            benchmark_cycles_sync2 <= 32'b0;
         end
         else begin
             cpu_ctrl_imem_rdata_sync1 <= imem_rdata;
@@ -238,10 +295,23 @@ module TOP(
             cpu_ctrl_dmem_rdata_sync2 <= cpu_ctrl_dmem_rdata_sync1;
             cpu_ctrl_dmem_ready_sync1 <= cpu_ctrl_dmem_ready_cpu;
             cpu_ctrl_dmem_ready_sync2 <= cpu_ctrl_dmem_ready_sync1;
+            benchmark_clear_ack_sync1 <= benchmark_clear_ack_cpu;
+            benchmark_clear_ack_sync2 <= benchmark_clear_ack_sync1;
+            benchmark_done_sync1 <= benchmark_done_cpu;
+            benchmark_done_sync2 <= benchmark_done_sync1;
+            benchmark_running_sync1 <= benchmark_running_cpu;
+            benchmark_running_sync2 <= benchmark_running_sync1;
+            // CPU 计时器只在 done 后保持稳定，CPU_ctrl 也只在 done 置位后采样该总线。
+            benchmark_cycles_sync1 <= benchmark_cycles_cpu;
+            benchmark_cycles_sync2 <= benchmark_cycles_sync1;
         end
     end
 
     assign cpu_ctrl_dmem_ready_sys = cpu_ctrl_dmem_ready_sync2;
+    assign benchmark_clear_ack_sys = benchmark_clear_ack_sync2;
+    assign benchmark_done_sys = benchmark_done_sync2;
+    assign benchmark_running_sys = benchmark_running_sync2;
+    assign benchmark_cycles_sys = benchmark_cycles_sync2;
 
     PDU_kernel pdu_kernel(
         .sys_clk                        (sys_clk                    ),
@@ -333,7 +403,14 @@ module TOP(
         .cpu_commit_instr               (cpu_commit_instr           ),
         .cpu_commit_halt                (cpu_commit_halt            ),
         .cpu_reg_ra                     (cpu_reg_ra                 ),
-        .cpu_reg_rd                     (cpu_reg_rd                 )
+        .cpu_reg_rd                     (cpu_reg_rd                 ),
+        .branch_predictor_disable       (branch_predictor_disable   ),
+        .benchmark_arm                  (benchmark_arm              ),
+        .benchmark_clear                (benchmark_clear            ),
+        .benchmark_clear_ack            (benchmark_clear_ack_sys    ),
+        .benchmark_done                 (benchmark_done_sys         ),
+        .benchmark_running              (benchmark_running_sys      ),
+        .benchmark_cycles               (benchmark_cycles_sys       )
     );
 
     CPU cpu(
@@ -341,6 +418,9 @@ module TOP(
         .rst                            (cpu_rst_sync               ),
         .global_en                      (cpu_global_en_sync         ),
         .cache_flush                    (cpu_cache_flush            ),
+        .branch_predictor_disable       (branch_predictor_disable_sync),
+        .benchmark_arm                  (benchmark_arm_sync         ),
+        .benchmark_clear                (benchmark_clear_sync       ),
         .imem_raddr                     (cpu_imem_addr              ),
         .imem_rdata                     (cpu_imem_rdata             ),
         .dmem_mem_r                     (cpu_dmem_mem_r             ),
@@ -359,6 +439,10 @@ module TOP(
         .commit_dmem_we                 (                           ),
         .commit_dmem_wa                 (                           ),
         .commit_dmem_wd                 (                           ),
+        .benchmark_clear_ack            (benchmark_clear_ack_cpu    ),
+        .benchmark_done                 (benchmark_done_cpu         ),
+        .benchmark_running              (benchmark_running_cpu      ),
+        .benchmark_cycles               (benchmark_cycles_cpu       ),
         .debug_reg_ra                   (cpu_reg_ra                 ),
         .debug_reg_rd                   (cpu_reg_rd                 )
     );

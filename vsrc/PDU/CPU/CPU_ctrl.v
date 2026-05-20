@@ -27,6 +27,8 @@ CORE_BREAKPOINT_IDS             +0x4C           Read-only           Local regist
 
 CORE_BREAK                      +0x50           Read-only           Local register              The breakpoint id that was hit, or 8 if halted
 CORE_CURRENT_PC                 +0x54           Read-only           Register from CPU-PC        Current program counter
+CORE_BENCH_CTRL                 +0x58           Read-write          Local register              Benchmark control/status
+CORE_BENCH_CYCLES               +0x5C           Read-only           Register from CPU timer     Last benchmark cycle count
 CORE_BREAKPOINT_ADDR0           +0x60           Read-only           Local register              Address of breakpoint 0
 ...                             ...             ...                 ...                         ...
 CORE_BREAKPOINT_ADDR7           +0x7C           Read-only           Local register              Address of breakpoint 7
@@ -72,7 +74,16 @@ module CPU_ctrl (
 
     // RF debug signals
     output                  [ 4 : 0]            cpu_reg_ra          ,
-    input                   [31 : 0]            cpu_reg_rd   
+    input                   [31 : 0]            cpu_reg_rd          ,
+
+    // Benchmark / branch predictor control signals
+    output          reg     [ 0 : 0]            branch_predictor_disable,
+    output          reg     [ 0 : 0]            benchmark_arm       ,
+    output          reg     [ 0 : 0]            benchmark_clear     ,
+    input                   [ 0 : 0]            benchmark_clear_ack ,
+    input                   [ 0 : 0]            benchmark_done      ,
+    input                   [ 0 : 0]            benchmark_running   ,
+    input                   [31 : 0]            benchmark_cycles
 );
 
     localparam CORE_BASE                            = 32'H00008100;
@@ -93,6 +104,8 @@ module CPU_ctrl (
     localparam CORE_BREAKPOINT_IDS_OFFSET           = 8'H4C;
     localparam CORE_BREAK_OFFSET                    = 8'H50;
     localparam CORE_CURRENT_PC_OFFSET               = 8'H54;
+    localparam CORE_BENCH_CTRL_OFFSET               = 8'H58;
+    localparam CORE_BENCH_CYCLES_OFFSET             = 8'H5C;
     localparam CORE_BREAKPOINT_ADDR_OFFSET          = 8'H60;
     localparam CORE_REG_OFFSET                      = 8'H80;
 
@@ -115,6 +128,8 @@ module CPU_ctrl (
     wire [ 7 : 0] core_breakpoint_ids;
     reg  [ 3 : 0] core_break;
     reg  [31 : 0] core_current_pc;
+    reg  [31 : 0] core_bench_ctrl;
+    reg  [31 : 0] core_bench_cycles;
     wire [31 : 0] core_breakpoint_addr;
     wire [31 : 0] core_reg_rd;
 
@@ -166,6 +181,10 @@ module CPU_ctrl (
                     interface_rdata = {28'B0, core_break};
                 CORE_CURRENT_PC_OFFSET:
                     interface_rdata = core_current_pc;
+                CORE_BENCH_CTRL_OFFSET:
+                    interface_rdata = core_bench_ctrl;
+                CORE_BENCH_CYCLES_OFFSET:
+                    interface_rdata = core_bench_cycles;
                 default:
                     interface_rdata = 32'h0;
             endcase
@@ -382,6 +401,52 @@ module CPU_ctrl (
     assign core_breakpoint_ids = reg_breakpoint_valid;
     assign cpu_reg_ra = interface_addr[6 : 2];
     assign core_reg_rd = cpu_reg_rd;
+
+/* ------------------------------ benchmark control ----------------------------- */
+
+    // CORE_BENCH_CTRL 位定义：
+    // [0] branch_predictor_disable：PDU 可动态关闭 IF 阶段预测取指；
+    // [1] benchmark_arm：下一次硬件 RUN 作为 Benchmark 运行；
+    // [2] benchmark_clear：写 1 发起清零请求，CPU 域计时器应答后自动清回 0；
+    // [8] benchmark_done / [9] benchmark_running：来自 CPU 域计时器的只读状态快照。
+    always @(posedge sys_clk) begin
+        if (sys_rst) begin
+            branch_predictor_disable <= 1'b0;
+            benchmark_arm <= 1'b0;
+            benchmark_clear <= 1'b0;
+            core_bench_ctrl <= 32'b0;
+            core_bench_cycles <= 32'b0;
+        end
+        else begin
+            core_bench_ctrl[0] <= branch_predictor_disable;
+            core_bench_ctrl[1] <= benchmark_arm;
+            core_bench_ctrl[2] <= benchmark_clear;
+            core_bench_ctrl[7:3] <= 5'b0;
+            core_bench_ctrl[8] <= benchmark_done;
+            core_bench_ctrl[9] <= benchmark_running;
+            core_bench_ctrl[31:10] <= 22'b0;
+
+            if (benchmark_done) begin
+                // done 后 CPU 域 cycles 保持稳定，这里锁存为 PDU 可安全读取的结果快照。
+                core_bench_cycles <= benchmark_cycles;
+            end
+
+            if (benchmark_clear_ack) begin
+                // clear 请求跨域送达并被 CPU 计时器确认后自动撤销，避免后续 benchmark 被持续清零。
+                benchmark_clear <= 1'b0;
+                core_bench_cycles <= 32'b0;
+            end
+
+            if (interface_we && interface_addr[7 : 0] == CORE_BENCH_CTRL_OFFSET) begin
+                branch_predictor_disable <= interface_wdata[0];
+                benchmark_arm <= interface_wdata[1];
+                if (interface_wdata[2]) begin
+                    benchmark_clear <= 1'b1;
+                    core_bench_cycles <= 32'b0;
+                end
+            end
+        end
+    end
 
 /* ------------------------------ CDC synchronizers ----------------------------- */
 
