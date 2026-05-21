@@ -67,9 +67,9 @@ module CPU (
     wire commit_advance;
     wire bp_redirect_valid;
     wire [31:0] bp_redirect_pc;
-    wire [31:0] bp_meta_IF;
-    wire [31:0] bp_meta_ID;
-    wire [31:0] bp_meta_EX;
+    wire [63:0] bp_meta_IF;
+    wire [63:0] bp_meta_ID;
+    wire [63:0] bp_meta_EX;
     wire        bp_used_IF;
     wire        bp_used_ID;
     wire        bp_used_EX;
@@ -111,12 +111,13 @@ module CPU (
     wire        bp_pred_taken_IF;
     wire [31:0] bp_pred_target_IF;
     wire [31:0] bp_next_pc_IF = (bp_pred_valid_IF && bp_pred_taken_IF) ? bp_pred_target_IF : pc_plus_4_IF;
-    assign bp_used_IF = (!branch_predictor_disable) && bp_pred_valid_IF;
+    assign bp_used_IF = global_en && (!branch_predictor_disable) && bp_pred_valid_IF;
 
     branch_predictor u_branch_predictor (
         .clk              (clk),
         .rst              (rst),
-        .en               (global_en && !branch_predictor_disable),
+        .en               (global_en),
+        .predictor_disable(branch_predictor_disable),
         .stall            (dcache_wait),
         .if_pc            (pc_IF),
         .if_inst          (inst_IF),
@@ -142,7 +143,7 @@ module CPU (
     wire [31:0] pc_ID, inst_ID, pc_plus_4_ID;
     wire        commit_ID;
 
-    pipe_reg #(.WIDTH(32)) if_id_bp_meta_reg (
+    pipe_reg #(.WIDTH(64)) if_id_bp_meta_reg (
         .clk(clk), .rst(rst), .en(global_en), .stall(if_id_stall), .flush(if_id_flush),
         .data_in(bp_meta_IF), .data_out(bp_meta_ID)
     );
@@ -244,7 +245,7 @@ module CPU (
     wire [2:0]  funct3_EX;
     wire [6:0]  funct7_EX;
 
-    pipe_reg #(.WIDTH(32)) id_ex_bp_meta_reg (
+    pipe_reg #(.WIDTH(64)) id_ex_bp_meta_reg (
         .clk(clk), .rst(rst), .en(global_en), .stall(id_ex_stall), .flush(id_ex_flush),
         .data_in(bp_meta_ID), .data_out(bp_meta_EX)
     );
