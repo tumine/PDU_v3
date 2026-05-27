@@ -12,7 +12,7 @@
 
 *.bin
 
-# your_cpu
+your_cpu
 
 PDU-Control/inits
 
